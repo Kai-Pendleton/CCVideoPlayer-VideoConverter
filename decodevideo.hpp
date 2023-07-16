@@ -68,7 +68,7 @@ public:
         frameBuffer = new uint8_t[frameSizeInBytes];
         av_image_fill_arrays(pFrame->data, pFrame->linesize, frameBuffer, pCodecContext->pix_fmt, pCodecContext->width, pCodecContext->height, 32);
 
-        frameRate = (int)(av_q2d(pFormatContext->streams[videoStreamIndex]->avg_frame_rate)+.5);
+        frameRate = (int) (av_q2d(pFormatContext->streams[videoStreamIndex]->avg_frame_rate)+0.5);
     }
 
     ~VideoDecoder() {

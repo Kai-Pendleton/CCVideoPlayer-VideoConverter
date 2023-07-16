@@ -28,7 +28,7 @@ int displayPalette(uint8_t *palette, int paletteSize);
 class FastPixelMap {
 
 public:
-    FastPixelMap(uint8_t *palette, int paletteSize) {
+    FastPixelMap(uint8_t *palette, int paletteSize, int imageWidth, int imageHeight, bool isPadded) {
         this->palette = palette;
         this->paletteSize = paletteSize;
         // (1) Sort palette by mean value
@@ -36,19 +36,25 @@ public:
         meanPaletteLUT = new uint8_t[paletteSize];
         if (!initializeMeanPaletteLUT()) std::cerr << "Failed to initialize Mean Palette LUT" << std::endl;
         if (!initializeIndexLUT()) std::cerr << "Failed to initialize Index LUT or your palette does not have white as a color!" << std::endl;
-        for (int i = 0; i < 768; i++) { // initialize squaresLUT
-            squaresLUT[i] = i * i;
-        }
         paletteDistanceLUT = new int[paletteSize*paletteSize];
         if (!initializePaletteDistanceLUT()) std::cerr << "Failed to initialize Palette Distance LUT!" << std::endl;
+
+        this->imageWidth = imageWidth;
+        this->imageHeight = imageHeight;
+        this->isPadded = isPadded;
+
+        colorErrorRow1 = new int[4*imageWidth+4](); // Allocate extra pixel to avoid needing to check for overflow
+        colorErrorRow2 = new int[4*imageWidth+4](); // Allocate extra pixel to avoid needing to check for overflow
     }
-    uint8_t* convertImage(uint8_t *image, int imageWidth, int imageHeight, bool isPadded);
+    uint8_t* convertImage(uint8_t *image);
     uint8_t* fullSearchConvertImage(uint8_t *image, int imageWidth, int imageHeight, bool isPadded);
 
     ~FastPixelMap() {
 
         delete[] meanPaletteLUT;
         delete[] paletteDistanceLUT;
+        delete[] colorErrorRow1;
+        delete[] colorErrorRow2;
 
     }
 
@@ -56,19 +62,28 @@ private:
     uint8_t *palette;
     int paletteSize;
 
+    int imageWidth;
+    int imageHeight;
+    bool isPadded;
+
+    void calculateError(int blue, int green, int red, int widthIndex, int indexMin);
+    int * colorErrorRow1;
+    int * colorErrorRow2;
+    void swapArrays();
+
     uint8_t *meanPaletteLUT;
     bool initializeMeanPaletteLUT();
 
     uint8_t indexLUT[256];
     bool initializeIndexLUT();
 
-    int squaresLUT[768];
-
     int *paletteDistanceLUT;
     bool initializePaletteDistanceLUT();
 
     int sed(uint8_t *colorA, uint8_t *colorB);
+    int sed(int blue, int green, int red, uint8_t *colorB);
     int ssd(uint8_t *colorA, uint8_t *colorB);
+    int ssd(int blue, int green, int red, uint8_t *colorB);
     int meanValue(uint8_t *color);
 
 };

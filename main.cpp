@@ -147,14 +147,25 @@ void writeGameImage(int width, int height, int frameRate, uint8_t * data, uint8_
 
 int main(int argc, char *argv[])
 {
+    int width = 164;
+    int height = 81;
     char * srcFileName;
-    if (argc != 2) {
+    if (argc < 2) {
         cout << "Please provide a movie file." << endl;
         return -1;
-    } else {
+    } else if (argc == 2) {
         srcFileName = argv[1];
-        cout << "Using provided movie file" << endl;
+        cout << "Using provided movie file and default resolution of 164x81." << endl;
+    } else if (argc == 4) {
+        srcFileName = argv[1];
+        width = stoi(argv[2]);
+        height = stoi(argv[3]);
+        cout << "Using provided movie file and resolution." << endl;
+    } else {
+        cerr << "Too many arguments. Exiting." << endl;
+        return -1;
     }
+
     BGRAPixel palette[16];
     for (int i = 0; i < 16; i++) {
         palette[i].blue = colorValues[i].blue;
@@ -168,8 +179,6 @@ int main(int argc, char *argv[])
     //writePPM("expandedPalette", 16, 16, (uint8_t*) expandedPalette, false);
 
 
-    int width = 164;
-    int height = 81;
 
     string dstFileName = "outputVideo.ppm";
     fstream dstVideo(dstFileName, ios::out | ios::in | ios::trunc | ios::binary);
@@ -193,25 +202,28 @@ int main(int argc, char *argv[])
     uint8_t* image = nullptr;
     uint8_t *pal8Image = nullptr;
     uint8_t *oldPal8Image = nullptr;
-    FastPixelMap pixelMapper((uint8_t*)expandedPalette, 256);
+    FastPixelMap pixelMapper((uint8_t*)expandedPalette, 256, width, height, true);
     for (int i = 0; i < 500000; i++) {
 
         // Retrieve decoded BGRA image
         image = decoder.readFrame();
-	if (image == nullptr) break; //EOF
+        if (image == nullptr) break; //EOF
 
         if ( i%skipFrame == 0 ) {
-
-            //writePPM("test.ppm", width, height, image, true);
+//        if (true) {
+            //cout << i << endl;
+            //int snapshotFrame = 500;
+            //if (i == snapshotFrame) writePPM("test.ppm", width, height, image, true);
 
             // Convert image to pal8
-            pal8Image = pixelMapper.convertImage(image, width, height, true);
+            pal8Image = pixelMapper.convertImage(image);
+
             writeGameImage(width, height, frameRate, pal8Image, oldPal8Image, dstVideo);
 
             if (!(i == 0)) delete[] oldPal8Image;
             oldPal8Image = pal8Image;
 
-            if (i == 500) writePal8PPM("paletteTest.ppm", width, height, pal8Image, (uint8_t*) expandedPalette);
+            //if (i == snapshotFrame) writePal8PPM("paletteTest.ppm", width, height, pal8Image, (uint8_t*) expandedPalette);
 
         }
 
