@@ -106,17 +106,17 @@ void initializeExpandedColors() {
 
 void writeGameImage(int width, int height, int frameRate, uint8_t * data, uint8_t * oldFrame, fstream &dstVideo) {
 
-    uint16_t pixelCount = width * height;
+    int pixelCount = width * height;
 
     // Output every pixel if oldFrame does not exist. First frame of video.
     if (oldFrame == nullptr) {
-        dstVideo.write( (char *) &pixelCount, 2);
+        dstVideo.write( (char *) &pixelCount, 4);
         for (int i = 0; i < pixelCount; i++) {
             //cout << "x: " << i % width + 1 << ", y: " << i / width + 1 << ", back: " << (int)gamePalette[data[i]].backgroundIndex << ", fore: " << (int)gamePalette[data[i]].foregroundIndex << endl;
-            uint8_t x = i % width + 1;
-            uint8_t y = i / width + 1;
-            dstVideo.write( (char *) &x, 1);
-            dstVideo.write( (char *) &y, 1);
+            uint16_t x = i % width + 1;
+            uint16_t y = i / width + 1;
+            dstVideo.write( (char *) &x, 2);
+            dstVideo.write( (char *) &y, 2);
             dstVideo << colorCodes[gamePalette[data[i]].backgroundIndex] << colorCodes[gamePalette[data[i]].foregroundIndex];
             //dstVideo << (uint8_t) i % width + 1 << (uint8_t) i / width + 1 << colorCodes[gamePalette[data[i]].backgroundIndex] << colorCodes[gamePalette[data[i]].foregroundIndex];
         }
@@ -133,11 +133,13 @@ void writeGameImage(int width, int height, int frameRate, uint8_t * data, uint8_
         Pixel pixel = { i % width + 1, i / width + 1, color.backgroundIndex, color.foregroundIndex };
         convertedFrame.push_back(pixel);
     }
-    uint16_t frameSize = (uint16_t) convertedFrame.size();
-    dstVideo.write( (char *) &frameSize, 2);
+    int frameSize = convertedFrame.size();
+    dstVideo.write( (char *) &frameSize, 4);
     for (int i = 0; i < convertedFrame.size(); i++) {
-        dstVideo.write( (char *) &convertedFrame[i].x, 1);
-        dstVideo.write( (char *) &convertedFrame[i].y, 1);
+        uint16_t xCoord = convertedFrame[i].x;
+        uint16_t yCoord = convertedFrame[i].y;
+        dstVideo.write( (char *) &xCoord, 2);
+        dstVideo.write( (char *) &yCoord, 2);
 
         dstVideo << colorCodes[convertedFrame[i].backgroundIndex] << colorCodes[convertedFrame[i].textIndex];
 
@@ -196,7 +198,7 @@ int main(int argc, char *argv[])
         if (frameRate / skipFrame <= 12 && frameRate % skipFrame == 0) break; // We want the end frame rate to be below 12, but we dont want uneven frame skipping. This breaks if frame rates with no factor below below 13 is given.
     }
     cerr << "skipFrame: " << skipFrame << endl;
-    dstVideo << (uint8_t) width << (uint8_t) height << (uint8_t) (frameRate / skipFrame);
+    dstVideo << (uint8_t) (width>>8) << (uint8_t) (width&0x00ff) << (uint8_t) (height>>8) << (uint8_t) (height&0x00ff) << (uint8_t) (frameRate / skipFrame);
 
     decoder.seekFrame(0);
     uint8_t* image = nullptr;
