@@ -1,5 +1,11 @@
 #include <iostream>
 #include <vector>
+#include <thread>
+#include <mutex>
+#include <algorithm>
+#include <queue>
+#include <functional>
+#include <atomic>
 #include "decodevideo.hpp"
 #include "fastpixelmap.hpp"
 
@@ -37,6 +43,20 @@ struct Pixel {
     int backgroundIndex;
     int textIndex;
 };
+
+struct ConvertJob {
+    int frameNumber;
+    uint8_t* frame;
+};
+
+struct WriteJob {
+    int frameNumber;
+    uint8_t* frame;
+};
+
+bool operator> (const WriteJob &lhs, const WriteJob &rhs) {
+    return lhs.frameNumber > rhs.frameNumber;
+}
 
 ostream & operator << (ostream &out, const GamePixel &p) {
     out << "Red: " << (int)p.red << ", Green: " << (int)p.green << ", Blue: " << (int)p.blue << ", Back: " << (int)p.backgroundIndex << ", Fore: " << (int)p.foregroundIndex << ", Mean:" << (((int)p.red+p.green+p.blue)/3) << endl;
@@ -97,12 +117,87 @@ void initializeExpandedColors() {
             green = (int)(0.4 * colorValues[i].green + 0.6 * colorValues[j].green);
             blue = (int)(0.4 * colorValues[i].blue + 0.6 * colorValues[j].blue);
             expandedPalette[16 * i + j] = {blue, green, red};
-            gamePalette[16 * i + j] = {red, green, blue, j, i};
+            gamePalette[16 * i + j] = {red, green, blue, (uint8_t) j, (uint8_t) i};
         }
     }
     return;
 }
 
+queue<ConvertJob> convertJobQueue;
+mutex convertJobMutex;
+priority_queue<WriteJob, vector<WriteJob>, greater<WriteJob> > writeJobQueue; // Min Priority queue.
+mutex writeJobMutex;
+int finalFrameNumber = -1;
+atomic<bool> isFinished;
+
+void runDecoderThread(int width, int height, int skipFrame, VideoDecoder & decoder) {
+
+
+    decoder.seekFrame(0);
+    uint8_t* image = nullptr; // Don't need to allocate, decoder has an internal buffer that is used.
+    int frameSize = decoder.frameSizeInBytes;
+    int frameNumber = 1;
+    for (int i = 0; true; i++) {
+
+        // Retrieve decoded BGRA image
+        image = decoder.readFrame(); // decoder only returns nullptr when at EOF
+        if (image == nullptr) {
+                finalFrameNumber = frameNumber;
+                return; //EOF
+        }
+
+        if ( i%skipFrame == 0 ) {
+
+            // Add frame to queue as convertJob. Have to allocate new memory for frame, don't have to touch uint8_t* image.
+            uint8_t *queueFrame = new uint8_t[frameSize];
+            copy(image, image+frameSize-1, queueFrame);
+            convertJobMutex.lock();
+            convertJobQueue.push( {frameNumber, queueFrame} );
+            convertJobMutex.unlock();
+
+            frameNumber++;
+        }
+
+    }
+}
+
+void runConverterThread(int width, int height) {
+
+
+    FastPixelMap pixelMapper((uint8_t*)expandedPalette, 256, width, height, true);
+
+    // Grab frame from convertJobQueue, convert it, and DEALLOCATE ORIGINAL FRAME
+    // Then add converted frame to writeJobQueue along with frameNumber
+    for (int i = 0; true; i++) {
+
+        if (isFinished == true) return; // Decoder has returned and writer has finished writing. Thus, converter must be done and busy waiting. return.
+
+        ConvertJob job;
+        convertJobMutex.lock();
+        if (convertJobQueue.size() > 0) {
+            job = convertJobQueue.front();
+            convertJobQueue.pop();
+        } else {
+            convertJobMutex.unlock();
+            continue;
+        }
+        convertJobMutex.unlock();
+
+
+        uint8_t* pal8Image = pixelMapper.convertImage(job.frame); // pixelMapper allocates memory for us.
+
+        if (job.frameNumber == 500) writePal8PPM("paletteTest.ppm", width, height, pal8Image, (uint8_t*) expandedPalette);
+        if (job.frameNumber == 500) writePPM("test.ppm", width, height, job.frame, true);
+
+        writeJobMutex.lock();
+        writeJobQueue.push( {job.frameNumber, pal8Image} );
+        cout << "Pushed to writeJobQueue, new size of " << writeJobQueue.size() << endl;
+        writeJobMutex.unlock();
+
+        delete [] job.frame;
+    }
+
+}
 
 void writeGameImage(int width, int height, int frameRate, uint8_t * data, uint8_t * oldFrame, fstream &dstVideo) {
 
@@ -181,7 +276,6 @@ int main(int argc, char *argv[])
     //writePPM("expandedPalette", 16, 16, (uint8_t*) expandedPalette, false);
 
 
-
     string dstFileName = "outputVideo.ppm";
     fstream dstVideo(dstFileName, ios::out | ios::in | ios::trunc | ios::binary);
     if (!dstVideo.is_open()) {
@@ -200,38 +294,75 @@ int main(int argc, char *argv[])
     cerr << "skipFrame: " << skipFrame << endl;
     dstVideo << (uint8_t) (width>>8) << (uint8_t) (width&0x00ff) << (uint8_t) (height>>8) << (uint8_t) (height&0x00ff) << (uint8_t) (frameRate / skipFrame);
 
-    decoder.seekFrame(0);
-    uint8_t* image = nullptr;
-    uint8_t *pal8Image = nullptr;
+
+
+    // Create decoder thread, convert threads, go to write code
+    vector<thread> threads;
+    int hardwareThreads = thread::hardware_concurrency();
+    int converterThreadCount;
+    if (hardwareThreads < 3) converterThreadCount = 1;
+    else {
+        converterThreadCount = hardwareThreads - 2;
+    }
+    if (converterThreadCount > 6) converterThreadCount = 6;
+    // In short, minimum of 1 converter, max of 6, limit number of total threads to number of hardware threads
+
+    threads.emplace_back(runDecoderThread, width, height, skipFrame, ref(decoder));
+    for (int i = 0; i < converterThreadCount; i++) {
+        threads.emplace_back(runConverterThread, width, height);
+    }
+
+
     uint8_t *oldPal8Image = nullptr;
-    FastPixelMap pixelMapper((uint8_t*)expandedPalette, 256, width, height, true);
-    for (int i = 0; i < 500000; i++) {
+    uint8_t * pal8Image = nullptr;
+    int framesWritten = 0;
+    while (true) {
 
-        // Retrieve decoded BGRA image
-        image = decoder.readFrame();
-        if (image == nullptr) break; //EOF
+        WriteJob job;
 
-        if ( i%skipFrame == 0 ) {
-//        if (true) {
-            //cout << i << endl;
-            //int snapshotFrame = 500;
-            //if (i == snapshotFrame) writePPM("test.ppm", width, height, image, true);
 
-            // Convert image to pal8
-            pal8Image = pixelMapper.convertImage(image);
-
-            writeGameImage(width, height, frameRate, pal8Image, oldPal8Image, dstVideo);
-
-            if (!(i == 0)) delete[] oldPal8Image;
-            oldPal8Image = pal8Image;
-
-            //if (i == snapshotFrame) writePal8PPM("paletteTest.ppm", width, height, pal8Image, (uint8_t*) expandedPalette);
-
+        writeJobMutex.lock();
+        if (writeJobQueue.size() > 0) { // If job is available
+            job = writeJobQueue.top(); // Access job
+            if (job.frameNumber == framesWritten+1) { // If the job is for the next frame
+                writeJobQueue.pop(); // Take the job
+            } else {
+                writeJobMutex.unlock(); // Else, give up the job
+                continue; // Try again
+            }
+        } else {
+            cout << "Waiting on convert: " << convertJobQueue.size() << endl;
+            writeJobMutex.unlock();
+            continue;
         }
 
+        writeJobMutex.unlock();
+
+        pal8Image = job.frame;
+
+
+        writeGameImage(width, height, frameRate, pal8Image, oldPal8Image, dstVideo);
+        framesWritten++;
+
+        if (oldPal8Image != nullptr) delete[] oldPal8Image;
+
+        oldPal8Image = pal8Image;
+        pal8Image = nullptr;
+
+        if (framesWritten == finalFrameNumber-1) {
+            isFinished = true;
+            cout << "Joining..." << endl;
+            break;
+        }
     }
-    delete[] pal8Image;
+
     dstVideo.close();
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    cout << "Frames written: " <<  framesWritten << endl;
 
     return 0;
 }

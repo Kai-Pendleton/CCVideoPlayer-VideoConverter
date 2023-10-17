@@ -4,7 +4,7 @@
 #include <algorithm>
 
 #ifndef ALIGNMENT
-#define ALIGNMENT 16
+#define ALIGNMENT 64
 #endif
 
 struct BGRAPixel {
@@ -32,7 +32,6 @@ public:
         this->palette = palette;
         this->paletteSize = paletteSize;
         // (1) Sort palette by mean value
-        std::sort((BGRAPixel*) palette, (BGRAPixel*) palette+paletteSize-1, BGRAcmp);
         meanPaletteLUT = new uint8_t[paletteSize];
         if (!initializeMeanPaletteLUT()) std::cerr << "Failed to initialize Mean Palette LUT" << std::endl;
         if (!initializeIndexLUT()) std::cerr << "Failed to initialize Index LUT or your palette does not have white as a color!" << std::endl;

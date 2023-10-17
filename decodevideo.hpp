@@ -31,7 +31,7 @@ return (std::string)errbuf;
 
 // Different architectures have different values that ffmpeg likes to round its linesizes to. This is handled manually here.
 #ifndef ALIGNMENT
-#define ALIGNMENT 16
+#define ALIGNMENT 64
 #endif
 
 void scaleImage(AVFrame * pFrame, int scaleX, int scaleY, AVFrame * pScaledFrame, AVPixelFormat pixfmt);
@@ -47,7 +47,7 @@ public:
     VideoDecoder(int width, int height, std::string inputFileName) {
 
         frameCount = 0;
-        padCount = (32-(width%32))%32;
+        padCount = (ALIGNMENT-(width%ALIGNMENT))%ALIGNMENT;
         frameSizeInBytes = (width+padCount) * height * 4; // BGRA
         resultBuffer = new uint8_t[frameSizeInBytes];
 
@@ -87,11 +87,11 @@ public:
     bool seekFrame(int frameNumber);
     void printVideoInfo();
     int getFrameRate();
+    int frameSizeInBytes;
 
 private:
 
     int frameCount;
-    int frameSizeInBytes;
 
     int width;
     int height;
