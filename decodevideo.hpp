@@ -44,15 +44,16 @@ int writePal8PPM(std::string outputFileName, int width, int height, uint8_t *dat
 class VideoDecoder {
 
 public:
-    VideoDecoder(int width, int height, std::string inputFileName) {
+    VideoDecoder(int width, int height, int frameRate, std::string inputFileName) {
 
-        frameCount = 0;
+        framesProcessed = 0; // Total number of frames decoded
+        framesReturned = 0; // Total number of frames returned to the caller of readFrame. Always lower than framesProcessed since outputFrameRate will (almost) always be lower
         padCount = (ALIGNMENT-(width%ALIGNMENT))%ALIGNMENT;
         frameSizeInBytes = (width+padCount) * height * 4; // BGRA
-        resultBuffer = new uint8_t[frameSizeInBytes];
 
         this->width = width;
         this->height = height;
+        this->outputFrameRate = frameRate;
         this->inputFileName = inputFileName;
         filterDescription = std::string("scale=w=") + std::to_string(width) + ":h=" + std::to_string(height) + ":flags=bicubic,format=pix_fmts=" + av_get_pix_fmt_name(AV_PIX_FMT_RGB24);
 
@@ -64,11 +65,12 @@ public:
         pFrame = av_frame_alloc();
         pRGBFrame = av_frame_alloc();
         RGBBuffer = new uint8_t[frameSizeInBytes];
-        av_image_fill_arrays(pRGBFrame->data, pRGBFrame->linesize, RGBBuffer, AV_PIX_FMT_BGRA, width, height, 32);
+        av_image_fill_arrays(pRGBFrame->data, pRGBFrame->linesize, RGBBuffer, AV_PIX_FMT_BGRA, width, height, ALIGNMENT);
         frameBuffer = new uint8_t[frameSizeInBytes];
-        av_image_fill_arrays(pFrame->data, pFrame->linesize, frameBuffer, pCodecContext->pix_fmt, pCodecContext->width, pCodecContext->height, 32);
+        av_image_fill_arrays(pFrame->data, pFrame->linesize, frameBuffer, pCodecContext->pix_fmt, pCodecContext->width, pCodecContext->height, ALIGNMENT);
 
-        frameRate = (int) (av_q2d(pFormatContext->streams[videoStreamIndex]->avg_frame_rate)+0.5);
+        inputFrameRate = av_q2d(pFormatContext->streams[videoStreamIndex]->avg_frame_rate);
+
     }
 
     ~VideoDecoder() {
@@ -86,15 +88,16 @@ public:
     uint8_t *readFrame();
     bool seekFrame(int frameNumber);
     void printVideoInfo();
-    int getFrameRate();
+    double getFrameRate();
     int frameSizeInBytes;
 
 private:
 
-    int frameCount;
-
+    int framesProcessed;
+    int framesReturned;
     int width;
     int height;
+    int outputFrameRate;
     std::string inputFileName;
 
 
@@ -108,7 +111,7 @@ private:
     AVFrame * pFrame;
     AVFrame * pRGBFrame;
     int scaledBufferByteCount;
-    int frameRate;
+    double inputFrameRate;
     uint8_t * resultBuffer;
     uint8_t * frameBuffer;
     uint8_t * RGBBuffer;

@@ -110,6 +110,8 @@ int VideoDecoder::openInputFile() {
         return -1;
     }
 
+    pCodecContext->thread_count = 2; // This is bound to result in errors at some point. Changing it to >2 immediately causes errors. But it's faster! ~12s to ~8s total runtime
+    std::cout << "CODEC THREAD COUNT: " << pCodecContext->thread_count << std::endl;
 
     // Ready to open stream based on previous parameters
     result = avcodec_open2(pCodecContext, pVideoCodec, NULL);
@@ -135,15 +137,18 @@ int VideoDecoder::initializeFilters() {
     AVFilterInOut * pOutputs = avfilter_inout_alloc();
     AVFilterInOut * pInputs  = avfilter_inout_alloc();
     AVRational timeBase = {av_q2d(pFormatContext->streams[videoStreamIndex]->avg_frame_rate)*1000, 1000};
-    //std::cout << pFormatContext->streams[videoStreamIndex]->time_base.num << "/" << pFormatContext->streams[videoStreamIndex]->time_base.den << std::endl;
+    //std::cout << "Good: " << pFormatContext->streams[videoStreamIndex]->time_base.num << "/" << pFormatContext->streams[videoStreamIndex]->time_base.den << std::endl; // + std::to_string(pFormatContext->streams[videoStreamIndex]->time_base.num) + "/" + std::to_string(pFormatContext->streams[videoStreamIndex]->time_base.den) +
+    //std::cout << "Bad: " << std::to_string((int)(av_q2d(pFormatContext->streams[videoStreamIndex]->avg_frame_rate)*1000)) << std::endl; //  + std::to_string((int)(av_q2d(pFormatContext->streams[videoStreamIndex]->avg_frame_rate)*1000)) +
 
     pFilterGraph = avfilter_graph_alloc();
     if (!pOutputs || !pInputs || !pFilterGraph) {
         std::cout << "Input, output, or graph failed" << std::endl;
     }
 
-    std::string parseArgs = "buffer=video_size=" + std::to_string(pCodecContext->width) + "x" + std::to_string(pCodecContext->height) + ":pix_fmt=" + std::to_string((int)pCodecContext->pix_fmt) + ":time_base=" + std::to_string((int)(av_q2d(pFormatContext->streams[videoStreamIndex]->avg_frame_rate)*1000)) + "/1000:pixel_aspect=1/1 [in_1];"
+    std::string parseArgs = "buffer=video_size=" + std::to_string(pCodecContext->width) + "x" + std::to_string(pCodecContext->height) + ":pix_fmt=" + std::to_string((int)pCodecContext->pix_fmt) + ":time_base=" + std::to_string(pFormatContext->streams[videoStreamIndex]->time_base.num) + "/" + std::to_string(pFormatContext->streams[videoStreamIndex]->time_base.den) + ":pixel_aspect=1/1 [in_1];"
                         /*"buffer=video_size=16x16:pix_fmt=" + std::to_string((int)AV_PIX_FMT_RGB32) + ":time_base=" + std::to_string((int)(av_q2d(pFormatContext->streams[videoStreamIndex]->avg_frame_rate)*1000)) + ":pixel_aspect=1/1 [in_2];"*/
+                        //"[in_1] fps=fps=20 [in_1];"
+                        //"[in_1]minterpolate=fps=20:mi_mode=dup[in_1];"
                         "[in_1] scale=" + std::to_string(width) + ":" + std::to_string(height) + " [in_1];"
                         "[in_1] format=28 [in_1];"
                         /*"[in_1] [in_2] paletteuse [result_1];"*/
@@ -206,9 +211,17 @@ uint8_t* VideoDecoder::readFrame() {
             printf("avcodec_receive_frame error: %s\n", av_err2str(result));
         }
         av_packet_unref(pAVPacket);
+        double relTime = framesProcessed++ / inputFrameRate; // Use framesProcessed and inputFrameRate to get an approx timestamp
+        if (relTime < (double) framesReturned / outputFrameRate) { // If timestamp of framesProcessed is before the timestamp of framesDisplayed, then DON'T display another frame.
+            //std::cout << "Skipping frame: " << framesProcessed << std::endl;
+            av_frame_unref(pFrame);
+            continue;
+        }
+        framesReturned++;
         break;
     }
 
+    // Decoded frame is in pFrame. Now, the decoded, likely YUV, frame must be sent to the filtergraph to be scaled and converted to BGRA (RGB basically)
     if (av_buffersrc_add_frame_flags(pBufferSrcContext, pFrame, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) std::cout << "Pushing to pBufferSrc failed" << std::endl;
     while (true) {
         int ret = av_buffersink_get_frame(pBufferSinkContext, pRGBFrame);
@@ -218,9 +231,8 @@ uint8_t* VideoDecoder::readFrame() {
             std::cout << "Receive from pBufferSink failed" << std::endl;
     }
     av_frame_unref(pFrame);
-    av_packet_unref(pAVPacket);
     //for (int i = 0; i < frameSizeInBytes/4096; i+=4) std::cout << (int)pRGBFrame->data[0][i+2];
-    std::copy(pRGBFrame->data[0], pRGBFrame->data[0]+frameSizeInBytes-1, resultBuffer);
+    resultBuffer = pRGBFrame->data[0];
     av_frame_unref(pRGBFrame);
     return resultBuffer;
 
@@ -240,7 +252,7 @@ void VideoDecoder::printVideoInfo() {
     av_dump_format(pFormatContext, 0, inputFileName.c_str(), 0);
 }
 
-int VideoDecoder::getFrameRate() {
-    return frameRate;
+double VideoDecoder::getFrameRate() {
+    return inputFrameRate;
 }
 

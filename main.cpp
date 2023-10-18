@@ -60,6 +60,7 @@ bool operator> (const WriteJob &lhs, const WriteJob &rhs) {
 
 ostream & operator << (ostream &out, const GamePixel &p) {
     out << "Red: " << (int)p.red << ", Green: " << (int)p.green << ", Blue: " << (int)p.blue << ", Back: " << (int)p.backgroundIndex << ", Fore: " << (int)p.foregroundIndex << ", Mean:" << (((int)p.red+p.green+p.blue)/3) << endl;
+    return out;
 }
 
 bool pixelCmp(const GamePixel &a, const GamePixel &b) {
@@ -130,7 +131,9 @@ mutex writeJobMutex;
 int finalFrameNumber = -1;
 atomic<bool> isFinished;
 
-void runDecoderThread(int width, int height, int skipFrame, VideoDecoder & decoder) {
+bool isVerbose = false;
+
+void runDecoderThread(int width, int height, int outputFrameRate, VideoDecoder & decoder) {
 
 
     decoder.seekFrame(0);
@@ -146,22 +149,20 @@ void runDecoderThread(int width, int height, int skipFrame, VideoDecoder & decod
                 return; //EOF
         }
 
-        if ( i%skipFrame == 0 ) {
+        // Add frame to queue as convertJob. Have to allocate new memory for frame, don't have to touch uint8_t* image.
+        uint8_t *queueFrame = new uint8_t[frameSize];
+        copy(image, image+frameSize-1, queueFrame);
+        convertJobMutex.lock();
+        convertJobQueue.push( {frameNumber, queueFrame} );
+        if (isVerbose) cout << "DECODER PUSHED: " << convertJobQueue.size() << endl;
+        convertJobMutex.unlock();
 
-            // Add frame to queue as convertJob. Have to allocate new memory for frame, don't have to touch uint8_t* image.
-            uint8_t *queueFrame = new uint8_t[frameSize];
-            copy(image, image+frameSize-1, queueFrame);
-            convertJobMutex.lock();
-            convertJobQueue.push( {frameNumber, queueFrame} );
-            convertJobMutex.unlock();
-
-            frameNumber++;
-        }
+        frameNumber++;
 
     }
 }
 
-void runConverterThread(int width, int height) {
+void runConverterThread(int width, int height, int threadNo) {
 
 
     FastPixelMap pixelMapper((uint8_t*)expandedPalette, 256, width, height, true);
@@ -191,7 +192,7 @@ void runConverterThread(int width, int height) {
 
         writeJobMutex.lock();
         writeJobQueue.push( {job.frameNumber, pal8Image} );
-        cout << "Pushed to writeJobQueue, new size of " << writeJobQueue.size() << endl;
+        if (isVerbose) cout << "Thread " << threadNo << ", pushed to writeJobQueue, new size of " << writeJobQueue.size() << endl;
         writeJobMutex.unlock();
 
         delete [] job.frame;
@@ -246,6 +247,7 @@ int main(int argc, char *argv[])
 {
     int width = 164;
     int height = 81;
+    int frameRate = 12;
     char * srcFileName;
     if (argc < 2) {
         cout << "Please provide a movie file." << endl;
@@ -257,6 +259,12 @@ int main(int argc, char *argv[])
         srcFileName = argv[1];
         width = stoi(argv[2]);
         height = stoi(argv[3]);
+        cout << "Using provided movie file and resolution." << endl;
+    } else  if (argc == 5) {
+        srcFileName = argv[1];
+        width = stoi(argv[2]);
+        height = stoi(argv[3]);
+        frameRate = stoi(argv[4]);
         cout << "Using provided movie file and resolution." << endl;
     } else {
         cerr << "Too many arguments. Exiting." << endl;
@@ -283,16 +291,11 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    VideoDecoder decoder(width, height, srcFileName);
+    VideoDecoder decoder(width, height, frameRate, srcFileName);
     //decoder.printVideoInfo();
-    int frameRate = decoder.getFrameRate();
-    cerr << "Frame rate: " << frameRate << endl;
-    int skipFrame = 1;
-    for (;skipFrame <= 12; skipFrame++) {
-        if (frameRate / skipFrame <= 12 && frameRate % skipFrame == 0) break; // We want the end frame rate to be below 12, but we dont want uneven frame skipping. This breaks if frame rates with no factor below below 13 is given.
-    }
-    cerr << "skipFrame: " << skipFrame << endl;
-    dstVideo << (uint8_t) (width>>8) << (uint8_t) (width&0x00ff) << (uint8_t) (height>>8) << (uint8_t) (height&0x00ff) << (uint8_t) (frameRate / skipFrame);
+    double inputFrameRate = decoder.getFrameRate();
+    if (inputFrameRate < frameRate) frameRate = (int)(inputFrameRate+0.5); // I don't use frame interpolation, so it makes more sense to keep the low frameRate of an input video.
+    dstVideo << (uint8_t) (width>>8) << (uint8_t) (width&0x00ff) << (uint8_t) (height>>8) << (uint8_t) (height&0x00ff) << (uint8_t) (frameRate);
 
 
 
@@ -306,10 +309,11 @@ int main(int argc, char *argv[])
     }
     if (converterThreadCount > 6) converterThreadCount = 6;
     // In short, minimum of 1 converter, max of 6, limit number of total threads to number of hardware threads
+    cout << "converter: " << converterThreadCount << endl;
 
-    threads.emplace_back(runDecoderThread, width, height, skipFrame, ref(decoder));
+    threads.emplace_back(runDecoderThread, width, height, frameRate, ref(decoder));
     for (int i = 0; i < converterThreadCount; i++) {
-        threads.emplace_back(runConverterThread, width, height);
+        threads.emplace_back(runConverterThread, width, height, i+1);
     }
 
 
@@ -331,7 +335,7 @@ int main(int argc, char *argv[])
                 continue; // Try again
             }
         } else {
-            cout << "Waiting on convert: " << convertJobQueue.size() << endl;
+            //if (isVerbose) cout << "Waiting on convert: " << convertJobQueue.size() << endl;
             writeJobMutex.unlock();
             continue;
         }
@@ -351,7 +355,7 @@ int main(int argc, char *argv[])
 
         if (framesWritten == finalFrameNumber-1) {
             isFinished = true;
-            cout << "Joining..." << endl;
+            //cout << "Joining..." << endl;
             break;
         }
     }
