@@ -339,7 +339,10 @@ int main(int argc, char *argv[])
         writeGameImage(width, height, frameRate, pal8Image, oldPal8Image, dstVideo);
         framesWritten++;
 
-        if (oldPal8Image != nullptr) delete[] oldPal8Image;
+        if (oldPal8Image != nullptr) {
+            //cout << "Deallocating" << endl;
+            delete[] oldPal8Image;
+        }
 
         oldPal8Image = pal8Image;
         pal8Image = nullptr;
