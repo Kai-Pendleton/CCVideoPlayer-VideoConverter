@@ -9,15 +9,6 @@
 #include "decodevideo.hpp"
 #include "fastpixelmap.hpp"
 
-/*
-*   Workshop 3
-*   by Kai Pendleton
-*
-*   Problem: Mapping pixels in a source image to the closest color available within a predefined palette
-*   Goal: An algorithm that can quickly convert RGB images to pal8
-*
-*/
-
 using namespace std;
 
 char colorCodes[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
@@ -187,7 +178,7 @@ void runConverterThread(int width, int height, int threadNo) {
 
         uint8_t* pal8Image = pixelMapper.convertImage(job.frame); // pixelMapper allocates memory for us.
 
-        if (job.frameNumber == 500) writePal8PPM("paletteTest.ppm", width, height, pal8Image, (uint8_t*) expandedPalette);
+        //if (job.frameNumber == 500) writePal8PPM("paletteTest.ppm", width, height, pal8Image, (uint8_t*) expandedPalette);
         if (job.frameNumber == 500) writePPM("test.ppm", width, height, job.frame, true);
 
         writeJobMutex.lock();
